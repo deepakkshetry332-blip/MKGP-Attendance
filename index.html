@@ -144,7 +144,7 @@
 
             <!-- History Header -->
             <div class="flex justify-between items-end mb-4">
-                <h3 class="font-bold text-gray-800">Today's Log</h3>
+                <h3 class="font-bold text-gray-800">Attendance Log</h3>
                 <div class="flex gap-2">
                     <button onclick="exportData('xlsx')" class="p-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200"><i data-lucide="sheet" class="w-4 h-4"></i></button>
                     <button onclick="exportData('pdf')" class="p-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200"><i data-lucide="file-text" class="w-4 h-4"></i></button>
@@ -216,9 +216,6 @@
         </div>
     </div>
     
-    <!-- Camera Input (REMOVED) -->
-    <!-- The file input for selfie capture has been removed. -->
-
     <!-- CODE ENTRY MODAL -->
     <div id="code-modal" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
         <div class="bg-white rounded-2xl w-full max-w-xs p-6 shadow-2xl text-center">
@@ -274,13 +271,13 @@
         if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
         const auth = firebase.auth();
-        // const storage = firebase.storage(); // Storage init REMOVED
 
         let currentUser = null;
         let officeLocation = null;
         let dailyCode = null;
         let currentAdminPin = DEFAULT_ADMIN_PIN; // Will be overwritten by Firestore
         let isAdminUnlocked = false;
+        let currentCheckInRecord = null; // Stores the active check-in document data
 
         // ------------------------------------------------
         // 1. AUTH LOGIC (Email/Password)
@@ -366,7 +363,7 @@
         }
 
         // ------------------------------------------------
-        // 2. CORE ATTENDANCE LOGIC (Check-In/Out - NO Selfie)
+        // 2. CORE ATTENDANCE LOGIC (Check-In/Out)
         // ------------------------------------------------
         
         let todayDocId = null;
@@ -391,30 +388,32 @@
               .where('class', '==', cls)
               .get().then(snap => {
                   if (!snap.empty) {
-                      const data = snap.docs[0].data();
-                      todayDocId = snap.docs[0].id;
+                      const doc = snap.docs[0];
+                      const data = doc.data();
+                      todayDocId = doc.id;
+                      currentCheckInRecord = data; // Store the full record
                       
                       if (data.checkOutTime) {
-                          setStatusUI("COMPLETED", data.checkInTime, data.checkOutTime);
+                          setStatusUI("COMPLETED", data.checkInTime, data.checkOutTime, data.duration);
                       } else {
                           setStatusUI("CHECKED_IN", data.checkInTime);
                       }
                   } else {
                       todayDocId = null;
+                      currentCheckInRecord = null;
                       setStatusUI("FRESH");
                   }
               });
         }
         
-        // Step 1: Direct call to handleAction for Check In (no camera step)
+        // Step 1: Direct call to handleAction for Check In
         function prepareCheckIn() {
              if (document.getElementById('btn-in').disabled) return;
-             // Immediately check GPS and code
              handleAction('IN');
         }
 
         // Step 2: Handle Geofencing and proceed to Code Check (if IN)
-        function handleAction(type) { // 'file' parameter removed
+        function handleAction(type) { 
             document.getElementById('checkout-confirm-modal').classList.add('hidden');
 
             if (!officeLocation) return showToast("⚠️ Admin: Set Office Location first", 'error');
@@ -456,12 +455,11 @@
             document.getElementById('code-modal').classList.add('hidden');
             document.getElementById('student-code-input').value = "";
             
-            // Proceed directly to check in logic
             processCheckIn(); 
         }
 
-        // Step 4: Save Check-In Record (No Selfie Upload)
-        async function processCheckIn() { // 'file' parameter removed
+        // Step 4: Save Check-In Record
+        async function processCheckIn() { 
             showToast("Marking Attendance...", 'info');
 
             const dateStr = new Date().toLocaleDateString('en-CA').replace(/\//g, '-');
@@ -475,9 +473,9 @@
                 dateId: dateStr,
                 checkInTime: new Date().toLocaleTimeString(),
                 checkOutTime: null,
+                duration: null, // New field initialized to null
                 timestamp: firebase.firestore.FieldValue.serverTimestamp(),
                 locationVerified: 'YES',
-                // photoUrl field REMOVED
             };
 
             try {
@@ -489,12 +487,57 @@
             }
         }
 
+        // Helper function to parse time string (e.g., "6:39:45 PM") into a Date object
+        function parseTimeString(timeStr, dateStr) {
+            // dateStr is in YYYY-MM-DD format (e.g., 2023-12-05)
+            try {
+                // Construct a full ISO-like date string for reliable parsing
+                // Assuming standard locale time format is used, which Date constructor handles robustly when combined with date.
+                const dateTimeStr = `${dateStr} ${timeStr}`;
+                return new Date(dateTimeStr);
+            } catch (e) {
+                console.error("Failed to parse time string:", timeStr, e);
+                return null;
+            }
+        }
+        
+        // Helper function to format duration from milliseconds to HH:MM string
+        function formatDuration(milliseconds) {
+            const totalSeconds = Math.floor(milliseconds / 1000);
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            
+            const pad = (num) => String(num).padStart(2, '0');
+            return `${pad(hours)}:${pad(minutes)}`;
+        }
+
+
         async function processCheckOut() {
-            if (!todayDocId) return;
+            if (!todayDocId || !currentCheckInRecord) return showToast("No active check-in found.", 'error');
+            
+            const checkInTimeStr = currentCheckInRecord.checkInTime;
+            const dateStr = currentCheckInRecord.dateId;
+            const checkOutTimeStr = new Date().toLocaleTimeString();
+            
+            const startTime = parseTimeString(checkInTimeStr, dateStr);
+            const endTime = parseTimeString(checkOutTimeStr, dateStr);
+
+            let duration = null;
+
+            if (startTime && endTime) {
+                // Ensure check out is after check in 
+                const durationMs = endTime.getTime() - startTime.getTime();
+                if (durationMs > 0) {
+                    duration = formatDuration(durationMs);
+                }
+            } else {
+                console.warn("Could not calculate duration due to parsing error.");
+            }
             
             try {
                 await db.collection('attendance').doc(todayDocId).update({
-                    checkOutTime: new Date().toLocaleTimeString()
+                    checkOutTime: checkOutTimeStr,
+                    duration: duration || '00:00' // Save the calculated duration
                 });
                 showToast("Checked Out! Have a nice day.", 'success');
                 checkTodayStatus();
@@ -508,14 +551,14 @@
             document.getElementById('checkout-confirm-modal').classList.remove('hidden');
         }
 
-        function setStatusUI(status, inTime, outTime) {
+        function setStatusUI(status, inTime, outTime, duration) {
             const btnIn = document.getElementById('btn-in');
             const btnOut = document.getElementById('btn-out');
             const statusText = document.getElementById('status-text');
             const timeLog = document.getElementById('time-log');
 
             if (status === 'COMPLETED') {
-                statusText.innerText = "Check Out Complete";
+                statusText.innerText = `Shift Complete (${duration || 'N/A'})`;
                 timeLog.innerText = `IN: ${inTime} | OUT: ${outTime}`;
                 btnIn.classList.add('opacity-50', 'cursor-not-allowed');
                 btnIn.classList.remove('btn-pulse');
@@ -543,7 +586,7 @@
 
 
         // ------------------------------------------------
-        // 3. ADMIN & SETTINGS (Includes PIN change and class management)
+        // 3. ADMIN & SETTINGS
         // ------------------------------------------------
         
         function listenToSettings() {
@@ -704,7 +747,9 @@
             const list = document.getElementById('history-list');
             list.innerHTML = '<div class="text-center text-gray-400 py-4">Loading...</div>';
             
-            let query = db.collection('attendance').orderBy('dateId', 'desc').orderBy('timestamp', 'desc');
+            // FIX: Removed the secondary orderBy('timestamp', 'desc') to prevent index requirement issues 
+            // that cause the log to get stuck on "Loading...". Sorting by dateId is generally sufficient.
+            let query = db.collection('attendance').orderBy('dateId', 'desc'); 
             
             // --- Filter Logic ---
             const startDate = document.getElementById('filter-start-date').value;
@@ -726,8 +771,6 @@
                   snap.forEach(doc => {
                       const d = doc.data();
                       
-                      // Selfie/Photo related data and UI is REMOVED
-                      
                       const exportRow = {
                           'Name': d.name,
                           'Email': d.email,
@@ -735,8 +778,8 @@
                           'Date': d.dateId,
                           'Check In': d.checkInTime,
                           'Check Out': d.checkOutTime || 'N/A',
+                          'Duration (HH:MM)': d.duration || 'N/A', // New field in export
                           'Location Status': d.locationVerified,
-                          // 'Photo URL' REMOVED
                       };
                       window.exportDataArr.push(exportRow);
                       
@@ -746,11 +789,13 @@
 
                       const statusColor = d.checkOutTime ? 'text-indigo-500' : 'text-green-500';
                       const statusIcon = d.checkOutTime ? 'log-out' : 'log-in';
+                      
+                      const durationDisplay = d.duration ? `<span class="text-xs text-indigo-500">(${d.duration})</span>` : '';
 
                       const html = `
                         <div class="bg-white p-4 rounded-xl border border-gray-100 shadow-sm flex justify-between items-center">
                             <div>
-                                <p class="font-bold text-gray-800">${d.name}</p>
+                                <p class="font-bold text-gray-800">${d.name} ${durationDisplay}</p>
                                 <p class="text-xs text-gray-400">${d.class} • ${d.dateId}</p>
                                 <p class="text-[10px] ${statusColor} mt-1 flex items-center"><i data-lucide="${statusIcon}" class="w-3 h-3 mr-1"></i> ${d.checkOutTime ? 'Completed' : 'Active'}</p>
                             </div>
@@ -803,17 +848,17 @@
         function exportData(type) {
             if(!window.exportDataArr || window.exportDataArr.length === 0) return showToast("No Data to export.", 'error');
             
-            // Define headers for the report (Photo URL column is REMOVED)
-            const headers = ['Name', 'Email', 'Class', 'Date', 'Check In', 'Check Out', 'Location Status']; 
+            // Define headers for the report
+            const headers = ['Name', 'Email', 'Class', 'Date', 'Check In', 'Check Out', 'Duration (HH:MM)', 'Location Status']; 
             
             // Map the data rows to match the new headers
-            const rows = window.exportDataArr.map(d => [d.Name, d.Email, d.Class, d.Date, d['Check In'], d['Check Out'], d['Location Status']]);
+            const rows = window.exportDataArr.map(d => [d.Name, d.Email, d.Class, d.Date, d['Check In'], d['Check Out'], d['Duration (HH:MM)'], d['Location Status']]);
             
             if(type === 'xlsx') {
                 const ws = XLSX.utils.json_to_sheet(window.exportDataArr);
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, "Attendance");
-                XLSX.writeFile(wb, "Attendance_Report_No_Photo.xlsx");
+                XLSX.writeFile(wb, "Attendance_Report_With_Duration.xlsx");
                 showToast("Excel Downloaded!", 'success');
             } else {
                 const { jsPDF } = window.jspdf;
@@ -823,10 +868,9 @@
                     head: [headers], 
                     body: rows, 
                     startY: 10,
-                    styles: { fontSize: 9 },
-                    // columnStyles for photo URL is REMOVED
+                    styles: { fontSize: 8 },
                 });
-                doc.save("Attendance_Report_No_Photo.pdf");
+                doc.save("Attendance_Report_With_Duration.pdf");
                 showToast("PDF Downloaded!", 'success');
             }
         }
