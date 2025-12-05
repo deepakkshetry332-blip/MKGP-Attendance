@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Attendance Pro (Professional)</title>
+    <title>Attendance Pro (Code & GPS Only)</title>
     
     <!-- Tailwind CSS (Aesthetics) -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -11,11 +11,10 @@
     <!-- Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     
-    <!-- Firebase SDKs (Cloud Storage is now required for photos) -->
+    <!-- Firebase SDKs (Removed Storage, only Firestore and Auth remain) -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script> 
 
     <!-- Export Libraries -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
@@ -100,9 +99,9 @@
                 <!-- Check In -->
                 <button onclick="prepareCheckIn()" id="btn-in"
                     class="btn-pulse flex flex-col items-center justify-center p-6 bg-green-600 text-white rounded-2xl shadow-lg active:scale-95 transition">
-                    <i data-lucide="camera" class="w-8 h-8 mb-2"></i>
+                    <i data-lucide="log-in" class="w-8 h-8 mb-2"></i>
                     <span class="font-bold text-lg">Check In</span>
-                    <span class="text-xs text-green-200 opacity-80">Capture + Code</span>
+                    <span class="text-xs text-green-200 opacity-80">GPS + Code</span>
                 </button>
 
                 <!-- Check Out -->
@@ -217,8 +216,8 @@
         </div>
     </div>
     
-    <!-- Camera Input (Hidden) -->
-    <input type="file" id="selfie-input" accept="image/*" capture="user" class="hidden">
+    <!-- Camera Input (REMOVED) -->
+    <!-- The file input for selfie capture has been removed. -->
 
     <!-- CODE ENTRY MODAL -->
     <div id="code-modal" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
@@ -240,7 +239,7 @@
             <p class="text-sm text-gray-700 mb-6">Are you sure you want to Check Out now? This action cannot be undone by you.</p>
             <div class="grid grid-cols-2 gap-3 mt-4">
                 <button onclick="document.getElementById('checkout-confirm-modal').classList.add('hidden')" class="py-3 bg-gray-200 text-gray-700 rounded-xl font-bold text-sm">Cancel</button>
-                <button onclick="handleAction('OUT', null)" class="py-3 bg-red-600 text-white rounded-xl font-bold text-sm shadow-lg">Yes, Check Out</button>
+                <button onclick="handleAction('OUT')" class="py-3 bg-red-600 text-white rounded-xl font-bold text-sm shadow-lg">Yes, Check Out</button>
             </div>
         </div>
     </div>
@@ -275,7 +274,7 @@
         if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
         const auth = firebase.auth();
-        const storage = firebase.storage(); // Initialize Storage
+        // const storage = firebase.storage(); // Storage init REMOVED
 
         let currentUser = null;
         let officeLocation = null;
@@ -367,11 +366,10 @@
         }
 
         // ------------------------------------------------
-        // 2. CORE ATTENDANCE LOGIC (Check-In/Out & Selfie)
+        // 2. CORE ATTENDANCE LOGIC (Check-In/Out - NO Selfie)
         // ------------------------------------------------
         
         let todayDocId = null;
-        let selfieFile = null; // Holds the image file object temporarily
 
         function updateClassUI() {
             const cls = document.getElementById('class-select').value;
@@ -408,27 +406,15 @@
               });
         }
         
-        // Step 1: Trigger Camera Input
+        // Step 1: Direct call to handleAction for Check In (no camera step)
         function prepareCheckIn() {
              if (document.getElementById('btn-in').disabled) return;
-             // Ensure the input is clear before clicking it again
-             document.getElementById('selfie-input').value = null; 
-             document.getElementById('selfie-input').click();
+             // Immediately check GPS and code
+             handleAction('IN');
         }
 
-        // Step 2: Handle file selection and proceed to Geofencing
-        document.getElementById('selfie-input').addEventListener('change', function(event) {
-            selfieFile = event.target.files[0];
-            if (selfieFile) {
-                // Now check GPS and code
-                handleAction('IN', selfieFile);
-            } else {
-                showToast("Selfie capture cancelled.", 'error');
-            }
-        });
-
-        // Step 3: Handle Geofencing and Code Check
-        function handleAction(type, file) {
+        // Step 2: Handle Geofencing and proceed to Code Check (if IN)
+        function handleAction(type) { // 'file' parameter removed
             document.getElementById('checkout-confirm-modal').classList.add('hidden');
 
             if (!officeLocation) return showToast("⚠️ Admin: Set Office Location first", 'error');
@@ -442,7 +428,6 @@
                 document.getElementById('gps-indicator').innerText = `GPS: ±${Math.round(dist)}m`;
 
                 if (dist > GEOFENCE_RADIUS) {
-                    selfieFile = null; // Clear file on fail
                     return showToast(`❌ Too far! You are ${Math.round(dist)}m away.`, "error");
                 }
                 
@@ -457,56 +442,31 @@
                 }
 
             }, err => {
-                selfieFile = null;
                 showToast("GPS Error: Please enable location services.", 'error');
             }, {enableHighAccuracy: true});
         }
         
-        // Step 4: Handle Code Confirmation and final Check-In
+        // Step 3: Handle Code Confirmation and final Check-In
         function confirmCheckIn() {
             const input = document.getElementById('student-code-input').value;
             if (input !== dailyCode) {
-                selfieFile = null;
                 return showToast("❌ Wrong Class Code! Ask Teacher.", 'error');
             }
             
             document.getElementById('code-modal').classList.add('hidden');
             document.getElementById('student-code-input').value = "";
             
-            if (selfieFile) {
-                processCheckIn(selfieFile);
-            } else {
-                 showToast("Error: Selfie file lost. Please try check-in again.", 'error');
-            }
+            // Proceed directly to check in logic
+            processCheckIn(); 
         }
 
-        // Step 5: Upload Selfie and Save Record
-        async function processCheckIn(file) {
-            showToast("Uploading Selfie & Marking Attendance...", 'info');
+        // Step 4: Save Check-In Record (No Selfie Upload)
+        async function processCheckIn() { // 'file' parameter removed
+            showToast("Marking Attendance...", 'info');
 
             const dateStr = new Date().toLocaleDateString('en-CA').replace(/\//g, '-');
             const cls = document.getElementById('class-select').value;
             
-            let photoUrl = '';
-            
-            // Upload file to Firebase Storage
-            const storageRef = storage.ref();
-            const fileExtension = file.name.split('.').pop();
-            const fileName = `${currentUser.uid}-${cls}-${Date.now()}.${fileExtension}`;
-            const imageRef = storageRef.child(`selfies/${fileName}`);
-            
-            try {
-                // --- THIS IS THE CRITICAL UPLOAD BLOCK ---
-                await imageRef.put(file);
-                photoUrl = await imageRef.getDownloadURL();
-                // --- END CRITICAL UPLOAD BLOCK ---
-            } catch (e) {
-                // Display specific error to user for debugging
-                console.error("Storage Upload Failed:", e);
-                showToast("Upload Failed! Check Firebase Storage Rules. Error: " + (e.message || 'Unknown'), 'error');
-                return;
-            }
-
             const record = {
                 uid: currentUser.uid,
                 name: currentUser.displayName,
@@ -517,13 +477,12 @@
                 checkOutTime: null,
                 timestamp: firebase.firestore.FieldValue.serverTimestamp(),
                 locationVerified: 'YES',
-                photoUrl: photoUrl // Save the URL of the selfie
+                // photoUrl field REMOVED
             };
 
             try {
                 await db.collection('attendance').add(record);
-                showToast("Check-In Complete! Selfie Saved.", 'success');
-                selfieFile = null;
+                showToast("Check-In Complete! GPS and Code Verified.", 'success');
                 checkTodayStatus();
             } catch (e) {
                 showToast("DB Save Error: " + e.message, 'error');
@@ -547,6 +506,39 @@
         function confirmCheckOut() {
             if (document.getElementById('btn-out').disabled) return;
             document.getElementById('checkout-confirm-modal').classList.remove('hidden');
+        }
+
+        function setStatusUI(status, inTime, outTime) {
+            const btnIn = document.getElementById('btn-in');
+            const btnOut = document.getElementById('btn-out');
+            const statusText = document.getElementById('status-text');
+            const timeLog = document.getElementById('time-log');
+
+            if (status === 'COMPLETED') {
+                statusText.innerText = "Check Out Complete";
+                timeLog.innerText = `IN: ${inTime} | OUT: ${outTime}`;
+                btnIn.classList.add('opacity-50', 'cursor-not-allowed');
+                btnIn.classList.remove('btn-pulse');
+                btnIn.disabled = true;
+                btnOut.classList.add('opacity-50', 'cursor-not-allowed');
+                btnOut.disabled = true;
+            } else if (status === 'CHECKED_IN') {
+                statusText.innerText = "Currently Checked In";
+                timeLog.innerText = `IN: ${inTime}`;
+                btnIn.classList.add('opacity-50', 'cursor-not-allowed');
+                btnIn.classList.remove('btn-pulse');
+                btnIn.disabled = true;
+                btnOut.classList.remove('opacity-50', 'cursor-not-allowed');
+                btnOut.disabled = false;
+            } else { // FRESH
+                statusText.innerText = "Not Checked In";
+                timeLog.innerText = "--:--";
+                btnIn.classList.remove('opacity-50', 'cursor-not-allowed');
+                btnIn.classList.add('btn-pulse');
+                btnIn.disabled = false;
+                btnOut.classList.add('opacity-50', 'cursor-not-allowed');
+                btnOut.disabled = true;
+            }
         }
 
 
@@ -635,7 +627,7 @@
         }
 
         async function deleteClass(className) {
-            if (!confirm(`Are you sure you want to delete the class: ${className}?`)) return;
+            if (!confirm(`Admin: Are you sure you want to delete the class: ${className}?`)) return;
             
             const docRef = db.collection('settings').doc('classes');
             
@@ -734,11 +726,8 @@
                   snap.forEach(doc => {
                       const d = doc.data();
                       
-                      // Check if photo URL exists
-                      const photoIcon = d.photoUrl 
-                        ? `<a href="${d.photoUrl}" target="_blank" class="text-indigo-500 hover:text-indigo-700" title="View Selfie"><i data-lucide="image" class="w-4 h-4"></i></a>` 
-                        : '';
-
+                      // Selfie/Photo related data and UI is REMOVED
+                      
                       const exportRow = {
                           'Name': d.name,
                           'Email': d.email,
@@ -747,7 +736,7 @@
                           'Check In': d.checkInTime,
                           'Check Out': d.checkOutTime || 'N/A',
                           'Location Status': d.locationVerified,
-                          'Photo URL': d.photoUrl || 'N/A' // Added URL to export
+                          // 'Photo URL' REMOVED
                       };
                       window.exportDataArr.push(exportRow);
                       
@@ -766,7 +755,6 @@
                                 <p class="text-[10px] ${statusColor} mt-1 flex items-center"><i data-lucide="${statusIcon}" class="w-3 h-3 mr-1"></i> ${d.checkOutTime ? 'Completed' : 'Active'}</p>
                             </div>
                             <div class="text-right flex items-center gap-3">
-                                ${photoIcon}
                                 <div>
                                     <p class="text-sm font-bold text-gray-700">IN: ${d.checkInTime}</p>
                                     <p class="text-xs text-red-400">OUT: ${d.checkOutTime || 'N/A'}</p>
@@ -802,21 +790,30 @@
             t.classList.remove('opacity-0', 'translate-y-10', 'bg-red-800', 'bg-green-800', 'bg-gray-800');
             t.classList.add(`bg-${type === 'success' ? 'green' : type === 'error' ? 'red' : 'gray'}-800`);
             
-            setTimeout(() => t.classList.add('opacity-0', 'translate-y-10'), 3000);
+            // Remove previous timeout if it exists
+            if (window.toastTimeout) clearTimeout(window.toastTimeout);
+            
+            t.classList.remove('opacity-0', 'translate-y-10');
+            
+            window.toastTimeout = setTimeout(() => {
+                t.classList.add('opacity-0', 'translate-y-10');
+            }, 3000);
         }
 
         function exportData(type) {
-            if(!window.exportDataArr || window.exportDataArr.length === 0) return showToast("No Data", 'error');
+            if(!window.exportDataArr || window.exportDataArr.length === 0) return showToast("No Data to export.", 'error');
             
-            // Define headers for the report
-            const headers = ['Name', 'Email', 'Class', 'Date', 'Check In', 'Check Out', 'Location Status', 'Photo URL']; 
-            const rows = window.exportDataArr.map(d => [d.Name, d.Email, d.Class, d.Date, d['Check In'], d['Check Out'], d['Location Status'], d['Photo URL']]);
+            // Define headers for the report (Photo URL column is REMOVED)
+            const headers = ['Name', 'Email', 'Class', 'Date', 'Check In', 'Check Out', 'Location Status']; 
+            
+            // Map the data rows to match the new headers
+            const rows = window.exportDataArr.map(d => [d.Name, d.Email, d.Class, d.Date, d['Check In'], d['Check Out'], d['Location Status']]);
             
             if(type === 'xlsx') {
                 const ws = XLSX.utils.json_to_sheet(window.exportDataArr);
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, "Attendance");
-                XLSX.writeFile(wb, "Attendance_Report.xlsx");
+                XLSX.writeFile(wb, "Attendance_Report_No_Photo.xlsx");
                 showToast("Excel Downloaded!", 'success');
             } else {
                 const { jsPDF } = window.jspdf;
@@ -826,10 +823,10 @@
                     head: [headers], 
                     body: rows, 
                     startY: 10,
-                    styles: { fontSize: 8 },
-                    columnStyles: { 7: { cellWidth: 30 } } // Make URL column wider
+                    styles: { fontSize: 9 },
+                    // columnStyles for photo URL is REMOVED
                 });
-                doc.save("Attendance_Report.pdf");
+                doc.save("Attendance_Report_No_Photo.pdf");
                 showToast("PDF Downloaded!", 'success');
             }
         }
